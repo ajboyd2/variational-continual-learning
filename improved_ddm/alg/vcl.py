@@ -3,14 +3,14 @@ import utils
 from cla_models_multihead import MFVI_NN
 from copy import deepcopy
 import time
+import os
 
 ide_func = lambda x: np.float32(x)
 log_func = lambda x: np.float32(np.log(x))
 exp_func = lambda x: np.float32(np.exp(x))
 
-
 # Stores model weights (previous posterior weights = new prior weights)
-class WeightsStorage():
+class WeightsStorage:
     def __init__(self, no_lower_weights, no_upper_weights, prior_mean=0.0, prior_var=1.0):
         # Initial mean and variance for lower network and upper network
         self.lower_mean = np.ones([no_lower_weights]) * prior_mean
@@ -34,6 +34,173 @@ class WeightsStorage():
         for class_ind in range(len(post_u_mv)):
             self.upper_mean[class_ind] = deepcopy(post_u_mv[class_ind][0])
             self.upper_log_var[class_ind] = deepcopy(post_u_mv[class_ind][1])
+    
+    def _broaden(self, diffusion, old_mean, old_log_var):
+        old_var = np.exp(old_log_var)
+        broadened_variance = old_var + diffusion
+        new_mean = (old_var * old_mean /
+                    (old_var + broadened_variance))
+        return new_mean, np.log(broadened_variance)
+
+    def broaden_weights(self, diffusion):
+        # diffuses the prior by a set diffusion rate
+        self.lower_mean, self.lower_log_var = self._broaden(
+            diffusion=diffusion, 
+            old_mean=self.lower_mean, 
+            old_log_var=self.lower_log_var,
+        )
+
+        for class_ind in range(len(self.upper_mean)):
+            self.upper_mean[class_ind], self.upper_log_var[class_ind] = self._broaden(
+                diffusion=diffusion, 
+                old_mean=self.upper_mean[class_ind], 
+                old_log_var=self.upper_log_var[class_ind],
+            )
+
+class Hypothesis:
+    def __init__(self, prev_weights_path, save_path, s_t, diffusion, task_id, prev_results=None):
+        self.prev_weights_path = prev_weights_path
+        self.save_path = save_path
+        self.s_t = s_t
+        self.diffusion = diffusion
+        self.task_id = task_id
+
+    def get_weights(self, no_lower_weights, no_upper_weights):
+        ws = WeightsStorage(
+            no_lower_weights=no_lower_weights, 
+            no_upper_weights=no_upper_weights,
+            prior_mean=0.0,
+            prior_var=1.0,
+        )
+
+        if self.prev_weights_path is None:
+            return ws
+        else:
+            checkpoint = np.load(self.prev_weights_path)
+            ws.store_weights(
+                post_l_mv=checkpoint["lower"], 
+                post_u_mv=checkpoint["upper"],
+            )
+
+            if self.s_t == 1:
+                ws.broaden_weights(self.diffusion)
+
+            return ws
+
+    def get_weight_save_dir(self):
+        return f"{self.save_path}.model.npz"
+
+class RunResults:
+    def __init__(self, hypothesis, elbo, bias, test_metrics):
+        self.hypothesis = hypothesis
+        self.prev_weights_path = hypothesis.prev_weights_path
+        self.save_path = hypothesis.save_path
+        self.s_t = hypothesis.s_t
+        self.prev_results = hypothesis.prev_results
+        self.elbo = elbo
+        self.bias = bias
+        self.test_metrics = test_metrics
+        if self.prev_results is not None:
+            self.prev_results.register_child(self, s_t)
+
+        self.child_s0 = None
+        self.child_s1 = None
+        # to be calculated once the corresponding other result is done
+        self.single_log_prob = 0.0  # log(p) = 0.0 <=> p = 1.0
+        self.total_log_prob = 0.0   # this is overwritten for all but the initial hypothesis
+
+    def register_child(self, child, s_t):
+        if s_t == 0:
+            self.child_s0 = child
+        else:  # s_t == 1
+            self.child_s1 = child
+
+        if (self.child_s0 is not None) and (self.child_s1 is not None):
+            self.calculate_probabilities()
+
+    def calculate_probabilities(self):
+        assert(self.child_s1 is not None)
+        assert(self.child_s0 is not None)
+        assert(self.bias == self.child_s1.bias and self.bias == self.child_s0.bias)
+
+        z = self.child_s1.elbo - self.child_s0.elbo + self.bias
+        # log q(s_t=1) = log (sigmoid(z)) = log (1 / (1 + exp(-z)) = -log(1+exp(-z))
+        self.child_s1.single_log_prob = -np.log1p(np.exp(-1 * z)))
+        # log q(s_t=0) = log (1 - q(s_t=1)) = log(1 - sigmoid(z)) = log(sigmoid(-z)) = -log(1+exp(z))
+        self.child_s0.single_log_prob = -np.log1p(np.exp(z))
+
+        # log q(s_{1:t}) = log q(s_t) + log q(s_{i:(t-1)})
+        self.child_s1.total_log_prob = self.child_s1.single_log_prob + self.total_log_prob
+        self.child_s0.total_log_prob = self.child_s0.single_log_prob + self.total_log_prob
+
+# Stores the current beams being considered and holds locations of weights.
+class BeamSearchHistory:
+    def __init__(self, directory, max_beams=2, diffusion=1.0, jump_bias=0.0):
+        self.directory = directory
+        self.max_beams = max_beams
+        self.diffusion = diffusion
+        self.jump_bias = jump_bias
+        self.root = None
+        self.current_beams = []
+        self.depth = 0
+
+    def get_new_hypotheses(self):
+        if self.root is None:
+            return [Hypothesis(
+                prev_weights_path=None, 
+                save_path=f"{self.directory.rstrip("/")}/beam_0", 
+                s_t=0, 
+                diffusion=self.diffusion, 
+                task_id=0, 
+                prev_results=None,
+            )]
+        else:
+            hypotheses = []
+            for beam in self.current_beams:
+                if self.diffusion == 0:
+                    options = [0]
+                else:
+                    options = [0, 1]
+                for s_t in options:
+                    hypotheses.append(Hypothesis(
+                        prev_weights_path=beam.save_path,
+                        save_path=f"{beam.save_path}{s_t}", 
+                        s_t=s_t, 
+                        diffusion=self.diffusion, 
+                        task_id=self.depth, 
+                        prev_results=beam,
+                    ))
+            return hypotheses
+
+    def register_results(self, hypotheses, results):
+        result_nodes = []
+        for hypo, res in zip(hypotheses, results):
+            result_nodes.append(RunResults(
+                hypothesis=hypo,
+                bias=self.jump_bias,
+                **res,
+            ))
+
+        if self.root is None:
+            assert(len(result_nodes) == 1)
+            self.root = result_nodes[0]
+        
+        self.beams = result_nodes
+        self.depth += 1
+    
+    def prune_beams(self):
+        sorted_beams = sorted(self.beams, key=lambda x: -x.total_log_prob)
+        self.beams = sorted_beams[:self.max_beams]
+        
+    
+# Factory function to return a beam search object
+def get_beam_search_history(directory, **kwargs):
+    beam_path = f"{directory.rstrip("/")}/beams.pkl"
+    if os.path.isfile(beam_path):
+        # TODO: Check if model hyperparameters match for the current run and the history being loaded
+        return pickle.load(open(beam_path, "rb"))
+    else:
+        return BeamSearchHistory(file_path=beam_path, **kwargs)
 
 # Initialise model weights before training on new data, using small random means and small variances
 def initialise_weights(weights):
@@ -43,7 +210,8 @@ def initialise_weights(weights):
 
 # Run VCL on model; returns accuracies on each task after training on each task
 def run_vcl_shared(hidden_size, no_epochs, data_gen, coreset_method, coreset_size=0,
-                   batch_size=None, path='sandbox/', multi_head=False, learning_rate=0.005, store_weights=False):
+                   batch_size=None, path='sandbox/', multi_head=False, learning_rate=0.005, store_weights=False,
+                   beam_size=1, diffusion=0, jump_bias=0):
     in_dim, out_dim = data_gen.get_dims()
     x_coresets, y_coresets = [], []
     x_testsets, y_testsets = [], []
