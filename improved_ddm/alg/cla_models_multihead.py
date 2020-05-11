@@ -191,7 +191,7 @@ class MFVI_NN(object):
         # Training cycle
         for epoch in range(no_epochs):
             # Random order of batches
-            perm_inds = range(x_train.shape[0])
+            perm_inds = list(range(x_train.shape[0]))
             np.random.shuffle(perm_inds)
             cur_x_train = x_train[perm_inds]
             cur_y_train = y_train[perm_inds]
@@ -227,8 +227,8 @@ class MFVI_NN(object):
 
             # Display logs every display_epoch
             if epoch == 0 or (epoch+1) % display_epoch == 0 or epoch == no_epochs-1:
-                print("Epoch:", '%04d' % (epoch + 1), "total cost=", "{:.9f}".format(avg_cost), "lik term=",
-                      "{:.9f}".format(avg_lik_cost), "kl term=", "{:.9f}".format(avg_cost - avg_lik_cost))
+                print(("Epoch:", '%04d' % (epoch + 1), "total cost=", "{:.9f}".format(avg_cost), "lik term=",
+                      "{:.9f}".format(avg_lik_cost), "kl term=", "{:.9f}".format(avg_cost - avg_lik_cost)))
             costs.append(avg_cost)
             lik_costs.append(avg_lik_cost)
 
@@ -285,7 +285,7 @@ class MFVI_NN(object):
                 lower_net.new_m: lower_weights[0],
                 lower_net.new_v: lower_weights[1]})
 
-        if not isinstance(class_idx, (list,)):
+        if not isinstance(class_idx, list):
             class_idx = [class_idx]
 
         # Upper weights: go over each class

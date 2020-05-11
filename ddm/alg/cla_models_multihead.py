@@ -68,7 +68,7 @@ class Cla_NN(object):
         costs = []
         # Training cycle
         for epoch in range(no_epochs):
-            perm_inds = range(x_train.shape[0])
+            perm_inds = list(range(x_train.shape[0]))
             np.random.shuffle(perm_inds)
             cur_x_train = x_train[perm_inds]
             cur_y_train = y_train[perm_inds]
@@ -89,8 +89,8 @@ class Cla_NN(object):
                 avg_cost += c / total_batch
             # Display logs per epoch step
             if epoch % display_epoch == 0:
-                print("Epoch:", '%04d' % (epoch+1), "cost=", \
-                    "{:.9f}".format(avg_cost))
+                print(("Epoch:", '%04d' % (epoch+1), "cost=", \
+                    "{:.9f}".format(avg_cost)))
             costs.append(avg_cost)
         print("Optimization Finished!")
         return costs

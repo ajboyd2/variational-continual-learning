@@ -60,7 +60,7 @@ def run_vcl_shared(hidden_size, no_epochs, data_gen, coreset_method, coreset_siz
         x_testsets.append(x_test)
         y_testsets.append(y_test)
 
-    all_classes = range(data_gen.out_dim)
+    all_classes = list(range(data_gen.out_dim))
     training_loss_classes = []  # Training loss function depends on these classes
     training_classes = []       # Which classes' heads' weights change during training
     test_classes = []           # Which classes to compare between at test time
@@ -115,7 +115,7 @@ def run_vcl_shared(hidden_size, no_epochs, data_gen, coreset_method, coreset_siz
             upper_weights[class_id] = deepcopy(initialise_weights(upper_weights_prior[class_id]))
 
         # Assign initial weights to the model
-        model.assign_weights(range(no_heads), lower_weights, upper_weights)
+        model.assign_weights(list(range(no_heads)), lower_weights, upper_weights)
 
         # Train on non-coreset data
         model.reset_optimiser()
@@ -123,10 +123,10 @@ def run_vcl_shared(hidden_size, no_epochs, data_gen, coreset_method, coreset_siz
         start_time = time.time()
         _, _ = model.train(x_train, y_train, task_id, lower_weights_prior, upper_weights_prior, no_epochs, bsize)
         end_time = time.time()
-        print 'Time taken to train (s):', end_time - start_time
+        print('Time taken to train (s):', end_time - start_time)
 
         # Get weights from model, and store in weights_storage
-        lower_weights, upper_weights = model.get_weights(range(no_heads))
+        lower_weights, upper_weights = model.get_weights(list(range(no_heads)))
         weights_storage.store_weights(lower_weights, upper_weights)
 
         # Save model weights after training on non-coreset data
@@ -144,9 +144,9 @@ def run_vcl_shared(hidden_size, no_epochs, data_gen, coreset_method, coreset_siz
                 # Initialise session, and load weights into model
                 model.init_session(test_task_id, learning_rate, training_classes[test_task_id])
                 lower_weights, upper_weights = weights_storage.return_weights()
-                model.assign_weights(range(no_heads), lower_weights, upper_weights)
+                model.assign_weights(list(range(no_heads)), lower_weights, upper_weights)
                 if len(x_coresets) > 0:
-                    print 'Training on coreset data...'
+                    print('Training on coreset data...')
                     # Train on each task's coreset data just before testing on that task
                     x_train_coreset, y_train_coreset = x_coresets[test_task_id], y_coresets[test_task_id]
                     bsize = x_train_coreset.shape[0] if (batch_size is None) else batch_size
@@ -166,9 +166,9 @@ def run_vcl_shared(hidden_size, no_epochs, data_gen, coreset_method, coreset_siz
             # Initialise session, and load weights into model
             model.init_session(task_id, learning_rate, training_classes[task_id])
             lower_weights, upper_weights = weights_storage.return_weights()
-            model.assign_weights(range(no_heads), lower_weights, upper_weights)
+            model.assign_weights(list(range(no_heads)), lower_weights, upper_weights)
             if len(x_coresets) > 0:
-                print 'Training on coreset data...'
+                print('Training on coreset data...')
                 x_train_coreset, y_train_coreset = utils.merge_coresets(x_coresets, y_coresets)
                 bsize = x_train_coreset.shape[0] if (batch_size is None) else batch_size
                 _, _ = model.train(x_train_coreset, y_train_coreset, task_id,
@@ -176,7 +176,7 @@ def run_vcl_shared(hidden_size, no_epochs, data_gen, coreset_method, coreset_siz
 
             # Test-time: Calculate test accuracy
             acc_interm = utils.get_scores_output_pred(model, x_testsets, y_testsets, test_classes,
-                                               task_idx=range(task_id+1), multi_head=multi_head)
+                                               task_idx=list(range(task_id+1)), multi_head=multi_head)
             acc[:task_id+1] = acc_interm
 
             model.close_session()
@@ -186,6 +186,6 @@ def run_vcl_shared(hidden_size, no_epochs, data_gen, coreset_method, coreset_siz
             all_acc = np.array(acc)
         else:
             all_acc = np.vstack([all_acc, acc])
-        print all_acc
+        print(all_acc)
 
     return all_acc

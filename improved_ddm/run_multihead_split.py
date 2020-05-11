@@ -1,7 +1,7 @@
 import numpy as np
 import tensorflow as tf
 import gzip
-import cPickle
+import pickle
 import sys
 sys.path.extend(['alg/'])
 import vcl
@@ -13,7 +13,7 @@ class SplitMnistGenerator():
     def __init__(self):
         # Open data file
         f = gzip.open('data/mnist.pkl.gz', 'rb')
-        train_set, valid_set, test_set = cPickle.load(f)
+        train_set, valid_set, test_set = pickle.load(f, encoding='latin1')
         f.close()
 
         # Define train and test data

@@ -1,7 +1,7 @@
 import numpy as np
 import tensorflow as tf
 import gzip
-import cPickle
+import pickle
 import sys
 sys.path.extend(['alg/'])
 import vcl
@@ -14,7 +14,7 @@ class PermutedMnistGenerator():
     def __init__(self, max_iter=10, random_seed=0):
         # Open data file
         f = gzip.open('data/mnist.pkl.gz', 'rb')
-        train_set, valid_set, test_set = cPickle.load(f)
+        train_set, valid_set, test_set = pickle.load(f, encoding='latin1')
         f.close()
 
         # Define train and test data
@@ -27,12 +27,12 @@ class PermutedMnistGenerator():
         self.cur_iter = 0
 
         self.out_dim = 10           # Total number of unique classes
-        self.class_list = range(10) # List of unique classes being considered, in the order they appear
+        self.class_list = list(range(10)) # List of unique classes being considered, in the order they appear
 
         # self.classes is the classes (with correct indices for training/testing) of interest at each task_id
         self.classes = []
         for iter in range(self.max_iter):
-            self.classes.append(range(0,10))
+            self.classes.append(list(range(0,10)))
 
         self.sets = self.classes
 
@@ -45,7 +45,7 @@ class PermutedMnistGenerator():
             raise Exception('Number of tasks exceeded!')
         else:
             np.random.seed(self.cur_iter+self.random_seed)
-            perm_inds = range(self.X_train.shape[1])
+            perm_inds = list(range(self.X_train.shape[1]))
             # First task is (unpermuted) MNIST, subsequent tasks are random permutations of pixels
             if self.cur_iter > 0:
                 np.random.shuffle(perm_inds)

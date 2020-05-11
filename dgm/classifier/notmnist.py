@@ -18,7 +18,7 @@ def load_notmnist(path, digits = None, conv = False, seed=0, ratio=0.9):
     Y = np_utils.to_categorical(Y, 10)
     np.random.seed(seed)
     N_train = int(X.shape[0]*ratio)
-    ind = np.random.permutation(range(X.shape[0]))
+    ind = np.random.permutation(list(range(X.shape[0])))
     if conv:
         X = X[:, :, :, np.newaxis]
     else:

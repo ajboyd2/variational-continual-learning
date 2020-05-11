@@ -15,7 +15,7 @@ def visualise_layer_weights(no_hiddens, path="", multi_head=False):
     classes = res['classes']
     class_index_conversion = res['class_index_conversion']
     no_tasks = len(classes)
-    task_range = range(no_tasks)
+    task_range = list(range(no_tasks))
 
     for task_id in task_range:
         # Load weights for this task
@@ -60,7 +60,7 @@ def visualise_layer_weights(no_hiddens, path="", multi_head=False):
                 no_rows = int(no_hiddens[layer] / no_cols)
 
             if plot_lower:
-                print "task %d lower figures ..." % task_id
+                print("task %d lower figures ..." % task_id)
 
                 if layer == 1:
                     fig0, axs0 = plt.subplots(no_rows, no_cols, figsize=(no_cols, no_rows))
@@ -107,7 +107,7 @@ def visualise_layer_weights(no_hiddens, path="", multi_head=False):
         x = np.linspace(-x_max, x_max, 1000)
 
         if plot_upper:
-            print "task %d upper figures ..." % task_id
+            print("task %d upper figures ..." % task_id)
 
             fig, axs = plt.subplots(no_rows, no_cols, figsize=(no_cols, no_rows))
             no_plot_digits = (task_id+1)*2 if multi_head else 10    # How many classes' upper level weights to plot
@@ -137,14 +137,14 @@ def visualise_layer_weights(no_hiddens, path="", multi_head=False):
 
 
 if __name__ == "__main__":
-    print 'Plotting weights for split MNIST'
+    print('Plotting weights for split MNIST')
     no_hiddens = [200]
     path = 'model_storage/split/'
     visualise_layer_weights(no_hiddens, path=path, multi_head=True)
     path = 'model_storage/split_coreset/'
     visualise_layer_weights(no_hiddens, path=path, multi_head=True)
 
-    print 'Plotting weights for permuted MNIST'
+    print('Plotting weights for permuted MNIST')
     no_hiddens = [100, 100]
     path = 'model_storage/permuted/'
     visualise_layer_weights(no_hiddens, path=path, multi_head=False)

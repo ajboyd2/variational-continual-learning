@@ -24,14 +24,14 @@ def construct_eval_func(dec, cla, batch_size_ph, dimZ, task, sample_W = True):
         N = n_iter * N_gen
         begin = time.time()
         kl_total = 0.0; kl_var = 0.0
-        for j in xrange(0, n_iter):
+        for j in range(0, n_iter):
             a, b = sess.run(ops, feed_dict={batch_size_ph: N_gen,
                                             keras.backend.learning_phase(): 0})   
             kl_total += a / n_iter
             kl_var += b / n_iter
         end = time.time()
-        print "kl=%.2f, ste=%.2f, time=%.2f" \
-                  % (kl_total, np.sqrt(kl_var / N), end - begin)
+        print("kl=%.2f, ste=%.2f, time=%.2f" \
+                  % (kl_total, np.sqrt(kl_var / N), end - begin))
         return kl_total, np.sqrt(kl_var / N)
         
     return eval
