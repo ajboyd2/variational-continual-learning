@@ -227,8 +227,8 @@ class MFVI_NN(object):
 
             # Display logs every display_epoch
             if epoch == 0 or (epoch+1) % display_epoch == 0 or epoch == no_epochs-1:
-                print(("Epoch:", '%04d' % (epoch + 1), "total cost=", "{:.9f}".format(avg_cost), "lik term=",
-                      "{:.9f}".format(avg_lik_cost), "kl term=", "{:.9f}".format(avg_cost - avg_lik_cost)))
+                print("Epoch:", '%04d' % (epoch + 1), "total cost=", "{:.9f}".format(avg_cost), "lik term=",
+                      "{:.9f}".format(avg_lik_cost), "kl term=", "{:.9f}".format(avg_cost - avg_lik_cost))
             costs.append(avg_cost)
             lik_costs.append(avg_lik_cost)
 
