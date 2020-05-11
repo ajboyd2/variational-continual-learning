@@ -9,6 +9,8 @@ import coreset
 import utils
 from copy import deepcopy
 
+tf.autograph.set_verbosity(0)
+tf.logging.set_verbosity(tf.logging.ERROR)
 
 class PermutedMnistGenerator():
     def __init__(self, max_iter=10, random_seed=0):
@@ -78,9 +80,23 @@ multi_head = False          # Multi-head or single-head network
 
 hidden_size = [100, 100]    # Size and number of hidden layers
 batch_size = 1024           # Batch size
-no_epochs = 800             # Number of training epochs per task
+no_epochs = 400 #800             # Number of training epochs per task
 permuted_num_tasks = 10
 
+options = [  # (diffusion, jump_bias, path_suffix)
+    (1.0,     0.0, "d1.0_b0.0"),
+    (0.1,     0.0, "d0.1_b0.0"),
+    (0.01,    0.0, "d0.01_b0.0"),
+    (1.0,   -10.0, "d1.0_bn10.0"),
+    (0.1,   -10.0, "d0.1_bn10.0"),
+    (0.01,  -10.0, "d0.01_bn10.0"),
+    (1.0,  -100.0, "d1.0_bn100.0"),
+    (0.1,  -100.0, "d0.1_bn100.0"),
+    (0.01, -100.0, "d0.01_bn100.0"),   
+]
+
+import sys
+diffusion, jump_bias, path_suffix = options[int(sys.argv[-1])]
 
 # No coreset
 tf.reset_default_graph()
@@ -88,30 +104,31 @@ random_seed = 1
 tf.set_random_seed(random_seed+1)
 np.random.seed(random_seed)
 
-path = 'model_storage/permuted/'    # Path where to store files
+path = f'model_storage/permuted/{path_suffix}/'    # Path where to store files
 data_gen = PermutedMnistGenerator(max_iter=permuted_num_tasks, random_seed=random_seed)
 coreset_size = 0
 vcl_result = vcl.run_vcl_shared(hidden_size, no_epochs, data_gen,
-    coreset.rand_from_batch, coreset_size, batch_size, path, multi_head, store_weights=store_weights)
+    coreset.rand_from_batch, coreset_size, batch_size, path, multi_head, store_weights=store_weights,
+    beam_size=2, diffusion=diffusion, jump_bias=jump_bias)
 
 # Store accuracies
 np.savez(path + 'test_acc.npz', acc=vcl_result)
 
 
-# Random coreset
-tf.reset_default_graph()
-random_seed = 1
-tf.set_random_seed(random_seed+1)
-np.random.seed(random_seed)
+# # Random coreset
+# tf.reset_default_graph()
+# random_seed = 1
+# tf.set_random_seed(random_seed+1)
+# np.random.seed(random_seed)
 
-path = 'model_storage/permuted_coreset/'    # Path where to store files
-data_gen = PermutedMnistGenerator(max_iter=permuted_num_tasks, random_seed=random_seed)
-coreset_size = 200
-vcl_result_coresets = vcl.run_vcl_shared(hidden_size, no_epochs, data_gen,
-    coreset.rand_from_batch, coreset_size, batch_size, path, multi_head, store_weights=store_weights)
+# path = 'model_storage/permuted_coreset/'    # Path where to store files
+# data_gen = PermutedMnistGenerator(max_iter=permuted_num_tasks, random_seed=random_seed)
+# coreset_size = 200
+# vcl_result_coresets = vcl.run_vcl_shared(hidden_size, no_epochs, data_gen,
+#     coreset.rand_from_batch, coreset_size, batch_size, path, multi_head, store_weights=store_weights)
 
-# Store accuracies
-np.savez(path + 'test_acc.npz', acc=vcl_result_coresets)
+# # Store accuracies
+# np.savez(path + 'test_acc.npz', acc=vcl_result_coresets)
 
-# Plot average accuracy
-utils.plot('model_storage/permuted_mnist_', vcl_result, vcl_result_coresets)
+# # Plot average accuracy
+# utils.plot('model_storage/permuted_mnist_', vcl_result, vcl_result_coresets)
