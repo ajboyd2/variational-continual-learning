@@ -20,10 +20,10 @@ class PermutedMnistGenerator():
         f.close()
 
         # Define train and test data
-        self.X_train = np.vstack((train_set[0], valid_set[0]))
-        self.Y_train = np.hstack((train_set[1], valid_set[1]))
-        self.X_test = test_set[0]
-        self.Y_test = test_set[1]
+        self.X_train = np.vstack((train_set[0], valid_set[0]))#[:1024]
+        self.Y_train = np.hstack((train_set[1], valid_set[1]))#[:1024]
+        self.X_test = test_set[0]#[:1024]
+        self.Y_test = test_set[1]#[:1024]
         self.random_seed = random_seed
         self.max_iter = max_iter
         self.cur_iter = 0
@@ -84,15 +84,16 @@ no_epochs = 400 #800             # Number of training epochs per task
 permuted_num_tasks = 10
 
 options = [  # (diffusion, jump_bias, path_suffix)
-    (1.0,     0.0, "d1.0_b0.0"),
-    (0.1,     0.0, "d0.1_b0.0"),
-    (0.01,    0.0, "d0.01_b0.0"),
-    (1.0,   -10.0, "d1.0_bn10.0"),
-    (0.1,   -10.0, "d0.1_bn10.0"),
-    (0.01,  -10.0, "d0.01_bn10.0"),
-    (1.0,  -100.0, "d1.0_bn100.0"),
-    (0.1,  -100.0, "d0.1_bn100.0"),
-    (0.01, -100.0, "d0.01_bn100.0"),   
+    (1.0,     0.0, "d1.0_b0.0"),       # 0
+    (0.1,     0.0, "d0.1_b0.0"),       # 1
+    (0.01,    0.0, "d0.01_b0.0"),      # 2
+    (1.0,   -10.0, "d1.0_bn10.0"),     # 3
+    (0.1,   -10.0, "d0.1_bn10.0"),     # 4
+    (0.01,  -10.0, "d0.01_bn10.0"),    # 5
+    (1.0,  -100.0, "d1.0_bn100.0"),    # 6
+    (0.1,  -100.0, "d0.1_bn100.0"),    # 7
+    (0.01, -100.0, "d0.01_bn100.0"),   # 8
+    (0.01,     0.0, "test"),            # 9
 ]
 
 import sys

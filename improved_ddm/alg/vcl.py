@@ -59,7 +59,8 @@ class WeightsStorage:
             )
 
 class Hypothesis:
-    def __init__(self, prev_weights_path, save_path, s_t, diffusion, task_id, prev_results=None):
+    def __init__(self, idx, prev_weights_path, save_path, s_t, diffusion, task_id, prev_results=None):
+        self.idx = idx
         self.prev_weights_path = prev_weights_path
         self.save_path = save_path
         self.s_t = s_t
@@ -68,7 +69,7 @@ class Hypothesis:
         self.prev_results = prev_results
 
         print("\n----------------------------------------------------------------")
-        print(f"Hypothesis created for {self.get_weight_save_dir()}")
+        print(f"Hypothesis {idx} created for {self.get_weight_save_dir()}")
         print(f"Previous weights located at {self.prev_weights_path}")
         print(f"Jump variable value of {s_t} with diffusion of {diffusion}")
         print("----------------------------------------------------------------\n")
@@ -82,24 +83,34 @@ class Hypothesis:
             prior_var=1.0,
         )
 
-        if self.prev_weights_path is None:
-            print("Model loaded with initial priors.")
-            return ws
+        # TODO: Allow for True values by fixing the KL divergence values in that case
+        already_trained = False #os.path.exists(self.get_weight_save_dir())
+        if already_trained:
+            print("Model already trained. Loading in previously trained weights.")
+            weights_path = self.get_weight_save_dir()
+            s_t = 0
         else:
-            print(f"Model loaded with prior from {self.prev_weights_path}")
-            checkpoint = np.load(self.prev_weights_path)
+            weights_path = self.prev_weights_path
+            s_t = self.s_t
+
+        if weights_path is None:
+            print("Model loaded with initial priors.")
+            return ws, already_trained
+        else:
+            print(f"Model loaded with prior from {weights_path}")
+            checkpoint = np.load(weights_path)
             ws.store_weights(
                 post_l_mv=checkpoint["lower"], 
                 post_u_mv=checkpoint["upper"],
             )
 
-            if self.s_t == 1:
+            if s_t == 1:
                 print(f"Model priors will be broadened as the jump variable is {self.s_t}")
                 ws.broaden_weights(self.diffusion)
             else:
                 print(f"Model priors will not be broadened as the jump variable is {self.s_t}")
 
-            return ws
+            return ws, already_trained
 
     def get_weight_save_dir(self):
         return f"{self.save_path}.model.npz"
@@ -114,14 +125,39 @@ class RunResults:
         self.elbo = elbo
         self.bias = bias
         self.test_metrics = test_metrics
-        if self.prev_results is not None:
-            self.prev_results.register_child(self, self.s_t)
 
         self.child_s0 = None
         self.child_s1 = None
         # to be calculated once the corresponding other result is done
-        self.single_log_prob = 0.0  # log(p) = 0.0 <=> p = 1.0
-        self.total_log_prob = 0.0   # this is overwritten for all but the initial hypothesis
+        if self.prev_results is None:
+            # log(p) = 0.0 <=> p = 1.0
+            self.single_log_prob = 0.0
+            self.total_log_prob = 0.0
+        else:
+            self.single_log_prob = None  
+            self.total_log_prob = None   
+            # this is overwritten for all but the initial hypothesis
+
+        if self.prev_results is not None:
+            self.prev_results.register_child(self, self.s_t)
+
+    def save(self):
+        pickle.dump(self, open(f"{self.hypothesis.save_path}.results.pkl", "wb"))
+
+    def load(base_path):
+        path = f"{base_path}.results.pkl"
+        if os.path.exists(path):
+            return True, pickle.load(open(path, "rb"))
+        else:
+            return False, None
+
+    def __str__(self):
+        return f'''RunResults for Hypothesis {self.hypothesis.idx}:
+          Params -> Bias={self.bias}, S_t={self.s_t}
+          Elbo -> {self.elbo}
+          Total  Prob (log) -> {np.exp(self.total_log_prob)} ({self.total_log_prob})")
+          Single Prob (log) -> {np.exp(self.single_log_prob)} ({self.single_log_prob})")         
+        '''
 
     def register_child(self, child, s_t):
         if s_t == 0:
@@ -139,13 +175,20 @@ class RunResults:
 
         z = self.child_s1.elbo - self.child_s0.elbo + self.bias
         # log q(s_t=1) = log (sigmoid(z)) = log (1 / (1 + exp(-z)) = -log(1+exp(-z))
-        self.child_s1.single_log_prob = -np.log1p(np.exp(-1 * z))
+        self.child_s1.single_log_prob = -np.log1p(np.exp(-z))
         # log q(s_t=0) = log (1 - q(s_t=1)) = log(1 - sigmoid(z)) = log(sigmoid(-z)) = -log(1+exp(z))
-        self.child_s0.single_log_prob = -np.log1p(np.exp(z))
+        self.child_s0.single_log_prob = -np.log1p(np.exp(+z))
 
         # log q(s_{1:t}) = log q(s_t) + log q(s_{i:(t-1)})
         self.child_s1.total_log_prob = self.child_s1.single_log_prob + self.total_log_prob
         self.child_s0.total_log_prob = self.child_s0.single_log_prob + self.total_log_prob
+
+        print(f"\nProbabilities for children of Hyp. {self.hypothesis.idx}:")
+        print(f"  Total Prob (log) for Parent Hyp. {self.hypothesis.idx}: {np.exp(self.total_log_prob)} ({self.total_log_prob})")
+        print(f"  Single Prob for Child s_t=0 Hyp. {self.child_s0.hypothesis.idx}: {np.exp(self.child_s0.single_log_prob)} ({self.child_s0.single_log_prob})")
+        print(f"  Single Prob for Child s_t=1 Hyp. {self.child_s1.hypothesis.idx}: {np.exp(self.child_s1.single_log_prob)} ({self.child_s1.single_log_prob})")
+        print(f"  Total Prob for Child s_t=0 Hyp. {self.child_s0.hypothesis.idx}: {np.exp(self.child_s0.total_log_prob)} ({self.child_s0.total_log_prob})")
+        print(f"  Total Prob for Child s_t=1 Hyp. {self.child_s1.hypothesis.idx}: {np.exp(self.child_s1.total_log_prob)} ({self.child_s1.total_log_prob})")
 
 # Stores the current beams being considered and holds locations of weights.
 class BeamSearchHistory:
@@ -158,6 +201,7 @@ class BeamSearchHistory:
         self.current_beams = []
         self.depth = 0
         self.max_depth = max_depth
+        self.num_hypotheses = 0
 
         print("\n================================================================")
         print(f"Performing variational beam search with a beam size of {max_beams},")
@@ -170,7 +214,9 @@ class BeamSearchHistory:
             return []
         
         if self.root is None:
+            self.num_hypotheses += 1
             return [Hypothesis(
+                idx=self.num_hypotheses-1,
                 prev_weights_path=None, 
                 save_path=f"{self.directory.rstrip('/')}/beam_0", 
                 s_t=0, 
@@ -187,6 +233,7 @@ class BeamSearchHistory:
                     options = [0, 1]
                 for s_t in options:
                     hypotheses.append(Hypothesis(
+                        idx=self.num_hypotheses,
                         prev_weights_path=beam.weights_path,
                         save_path=f"{beam.save_path}{s_t}", 
                         s_t=s_t, 
@@ -194,28 +241,37 @@ class BeamSearchHistory:
                         task_id=self.depth, 
                         prev_results=beam,
                     ))
+                    self.num_hypotheses += 1
             return hypotheses
 
     def register_results(self, hypotheses, results):
         result_nodes = []
         for hypo, res in zip(hypotheses, results):
-            result_nodes.append(RunResults(
-                hypothesis=hypo,
-                bias=self.jump_bias,
-                **res,
-            ))
+            if isinstance(res, RunResults):
+                result_nodes.append(res)
+            else:
+                result_nodes.append(RunResults(
+                    hypothesis=hypo,
+                    bias=self.jump_bias,
+                    **res,
+                ))
 
         if self.root is None:
             assert(len(result_nodes) == 1)
             self.root = result_nodes[0]
-        
-        print(f"{len(result_nodes)} have been processed")
+
+        print()
+        print(f"{len(result_nodes)} result nodes have been processed:")
+        for node in result_nodes:
+            print()
+            print(node)
+            node.save()
         self.current_beams = result_nodes
         self.depth += 1
     
     def prune_beams(self):
         sorted_beams = sorted(self.current_beams, key=lambda x: -x.total_log_prob)
-        print(f"Sorted weights of beams are: {[b.total_log_prob for b in sorted_beams]}")
+        print(f"Sorted weights (ids) of beams are: {[(b.total_log_prob, b.hypothesis.idx) for b in sorted_beams]}")
         self.current_beams = sorted_beams[:self.max_beams]
         print(f"Beams remaining after truncation: {len(self.current_beams)}")
         
@@ -230,10 +286,13 @@ def get_beam_search_history(directory, **kwargs):
         return BeamSearchHistory(directory=directory, **kwargs)
 
 # Initialise model weights before training on new data, using small random means and small variances
-def initialise_weights(weights):
-    weights_mean_init = np.random.normal(size=weights[0].shape, scale=0.1)
-    weights_log_var_init = np.ones_like(weights[1]) * (-6.0)
-    return [weights_mean_init, weights_log_var_init]
+def initialise_weights(weights, already_trained):
+    if already_trained:
+        return weights
+    else:
+        weights_mean_init = np.random.normal(size=weights[0].shape, scale=0.1)
+        weights_log_var_init = np.ones_like(weights[1]) * (-6.0)
+        return [weights_mean_init, weights_log_var_init]
 
 # Run VCL on model; returns accuracies on each task after training on each task
 def run_vcl_shared(hidden_size, no_epochs, data_gen, coreset_method, coreset_size=0,
@@ -299,8 +358,14 @@ def run_vcl_shared(hidden_size, no_epochs, data_gen, coreset_method, coreset_siz
         task_id = bsh.depth  # at start will be 0
         results = []
         for hypothesis in hypotheses:
+            # Previously trained models will load in their already computed results
+            result_loaded, potential_result = RunResults.load(hypothesis.save_path)
+            if result_loaded:
+                results.append(potential_result)
+                continue
+
             result = {}
-            weights_storage = hypothesis.get_weights(no_lower_weights, no_upper_weights)
+            weights_storage, already_trained = hypothesis.get_weights(no_lower_weights, no_upper_weights)
             # tf init model
             model.init_session(task_id, learning_rate, training_classes[task_id])
 
@@ -319,10 +384,10 @@ def run_vcl_shared(hidden_size, no_epochs, data_gen, coreset_method, coreset_siz
             lower_weights_prior, upper_weights_prior = weights_storage.return_weights()
 
             # Initialise using random means + small variances
-            lower_weights = initialise_weights(lower_weights_prior)
+            lower_weights = initialise_weights(lower_weights_prior, already_trained)
             upper_weights = deepcopy(upper_weights_prior)
             for class_id in training_classes[task_id]:
-                upper_weights[class_id] = deepcopy(initialise_weights(upper_weights_prior[class_id]))
+                upper_weights[class_id] = deepcopy(initialise_weights(upper_weights_prior[class_id], already_trained))
 
             # Assign initial weights to the model
             model.assign_weights(list(range(no_heads)), lower_weights, upper_weights)
@@ -331,8 +396,16 @@ def run_vcl_shared(hidden_size, no_epochs, data_gen, coreset_method, coreset_siz
             model.reset_optimiser()
 
             start_time = time.time()
-            costs, lik_costs = model.train(x_train, y_train, task_id, lower_weights_prior, upper_weights_prior, no_epochs, bsize)
-            result["elbo"] = costs[-1]  # this is the elbo from the last epoch
+            costs, lik_costs = model.train(
+                x_train, 
+                y_train, 
+                task_id, 
+                lower_weights_prior, 
+                upper_weights_prior, 
+                1 if already_trained else no_epochs, 
+                bsize,
+            )
+            result["elbo"] = -costs[-1]  # this is the elbo from the last epoch
             end_time = time.time()
             print('Time taken to train (s):', end_time - start_time)
 
