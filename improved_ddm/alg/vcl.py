@@ -36,17 +36,21 @@ class WeightsStorage:
             self.upper_mean[class_ind] = deepcopy(post_u_mv[class_ind][0])
             self.upper_log_var[class_ind] = deepcopy(post_u_mv[class_ind][1])
     
-    def _broaden(self, diffusion, old_mean, old_log_var):
+    def _broaden(self, diffusion, mult_diff, old_mean, old_log_var):
         old_var = np.exp(old_log_var)
-        broadened_variance = old_var + diffusion
+        if mult_diff:
+            broadened_variance = old_var * diffusion
+        else:
+            broadened_variance = old_var + diffusion
         new_mean = (old_var * old_mean /
                     (old_var + broadened_variance))
         return new_mean, np.log(broadened_variance)
 
-    def broaden_weights(self, diffusion):
+    def broaden_weights(self, diffusion, mult_diff):
         # diffuses the prior by a set diffusion rate
         self.lower_mean, self.lower_log_var = self._broaden(
             diffusion=diffusion, 
+            mult_diff=mult_diff,
             old_mean=self.lower_mean, 
             old_log_var=self.lower_log_var,
         )
@@ -54,24 +58,27 @@ class WeightsStorage:
         for class_ind in range(len(self.upper_mean)):
             self.upper_mean[class_ind], self.upper_log_var[class_ind] = self._broaden(
                 diffusion=diffusion, 
+                mult_diff=mult_diff,
                 old_mean=self.upper_mean[class_ind], 
                 old_log_var=self.upper_log_var[class_ind],
             )
 
 class Hypothesis:
-    def __init__(self, idx, prev_weights_path, save_path, s_t, diffusion, task_id, prev_results=None):
+    def __init__(self, idx, prev_weights_path, save_path, s_t, diffusion, mult_diff, task_id, prev_results=None, no_alternative_hyp=False):
         self.idx = idx
         self.prev_weights_path = prev_weights_path
         self.save_path = save_path
         self.s_t = s_t
+        self.no_alternative_hyp = no_alternative_hyp
         self.diffusion = diffusion
+        self.mult_diff = mult_diff
         self.task_id = task_id
         self.prev_results = prev_results
 
         print("\n----------------------------------------------------------------")
         print(f"Hypothesis {idx} created for {self.get_weight_save_dir()}")
         print(f"Previous weights located at {self.prev_weights_path}")
-        print(f"Jump variable value of {s_t} with diffusion of {diffusion}")
+        print(f"Jump variable value of {s_t} with {'relative increase' if mult_diff else 'constant'} diffusion of {diffusion}")
         print("----------------------------------------------------------------\n")
 
 
@@ -106,7 +113,7 @@ class Hypothesis:
 
             if s_t == 1:
                 print(f"Model priors will be broadened as the jump variable is {self.s_t}")
-                ws.broaden_weights(self.diffusion)
+                ws.broaden_weights(self.diffusion, self.mult_diff)
             else:
                 print(f"Model priors will not be broadened as the jump variable is {self.s_t}")
 
@@ -129,7 +136,7 @@ class RunResults:
         self.child_s0 = None
         self.child_s1 = None
         # to be calculated once the corresponding other result is done
-        if self.prev_results is None:
+        if (self.prev_results is None) or self.hypothesis.no_alternative_hyp:
             # log(p) = 0.0 <=> p = 1.0
             self.single_log_prob = 0.0
             self.total_log_prob = 0.0
@@ -192,11 +199,22 @@ class RunResults:
 
 # Stores the current beams being considered and holds locations of weights.
 class BeamSearchHistory:
-    def __init__(self, directory, max_beams=2, diffusion=1.0, jump_bias=0.0, max_depth=10):
+    def __init__(self, directory, max_beams=2, diffusion=1.0, jump_bias=0.0, max_depth=10, mult_diff=False):
         self.directory = directory
         self.max_beams = max_beams
         self.diffusion = diffusion
         self.jump_bias = jump_bias
+        self.mult_diff = mult_diff
+        if mult_diff:
+            if diffusion == 1:
+                self.no_jumping = True
+            else:
+                self.no_jumping = False
+        else:
+            if diffusion == 0:
+                self.no_jumping = True
+            else:
+                self.no_jumping = False
         self.root = None
         self.current_beams = []
         self.depth = 0
@@ -205,7 +223,7 @@ class BeamSearchHistory:
 
         print("\n================================================================")
         print(f"Performing variational beam search with a beam size of {max_beams},")
-        print(f"a diffusion constant of {diffusion}, jump bias of {jump_bias},")
+        print(f"a diffusion {'relative increase' if mult_diff else 'shift'} of {diffusion}, jump bias of {jump_bias},")
         print(f"over {max_depth} different tasks. Will save results to {directory}.")
         print("----------------------------------------------------------------\n")
 
@@ -221,13 +239,14 @@ class BeamSearchHistory:
                 save_path=f"{self.directory.rstrip('/')}/beam_0", 
                 s_t=0, 
                 diffusion=self.diffusion, 
+                mult_diff=self.mult_diff, 
                 task_id=0, 
                 prev_results=None,
             )]
         else:
             hypotheses = []
             for beam in self.current_beams:
-                if self.diffusion == 0:
+                if self.no_jumping:
                     options = [0]
                 else:
                     options = [0, 1]
@@ -237,9 +256,11 @@ class BeamSearchHistory:
                         prev_weights_path=beam.weights_path,
                         save_path=f"{beam.save_path}{s_t}", 
                         s_t=s_t, 
-                        diffusion=self.diffusion, 
+                        diffusion=self.diffusion,
+                        mult_diff=self.mult_diff, 
                         task_id=self.depth, 
                         prev_results=beam,
+                        no_alternative_hyp=len(options) == 1,
                     ))
                     self.num_hypotheses += 1
             return hypotheses
@@ -248,7 +269,12 @@ class BeamSearchHistory:
         result_nodes = []
         for hypo, res in zip(hypotheses, results):
             if isinstance(res, RunResults):
-                result_nodes.append(res)
+                result_nodes.append(RunResults(
+                    hypothesis=hypo,
+                    elbo=res.elbo, 
+                    bias=self.jump_bias, 
+                    test_metrics=res.test_metrics,
+                ))
             else:
                 result_nodes.append(RunResults(
                     hypothesis=hypo,
@@ -277,8 +303,8 @@ class BeamSearchHistory:
         
     
 # Factory function to return a beam search object
-def get_beam_search_history(directory, **kwargs):
-    beam_path = f"{directory.rstrip('/')}/beam_history.pkl"
+def get_beam_search_history(directory, beam_path, **kwargs):
+    #beam_path = f"{directory.rstrip('/')}/beam_history.pkl"
     if os.path.isfile(beam_path):
         # TODO: Check if model hyperparameters match for the current run and the history being loaded
         return pickle.load(open(beam_path, "rb"))
@@ -297,7 +323,8 @@ def initialise_weights(weights, already_trained):
 # Run VCL on model; returns accuracies on each task after training on each task
 def run_vcl_shared(hidden_size, no_epochs, data_gen, coreset_method, coreset_size=0,
                    batch_size=None, path='sandbox/', multi_head=False, learning_rate=0.005, store_weights=False,
-                   beam_size=1, diffusion=0, jump_bias=0):
+                   beam_size=1, diffusion=0, jump_bias=0, mult_diff=False, beam_path=None):
+    assert(beam_path is not None)
     in_dim, out_dim = data_gen.get_dims()
     x_coresets, y_coresets = [], []
     x_testsets, y_testsets = [], []
@@ -306,18 +333,28 @@ def run_vcl_shared(hidden_size, no_epochs, data_gen, coreset_method, coreset_siz
     all_acc = np.array([])
     no_tasks = data_gen.max_iter
 
+    all_tasks_to_test = getattr(data_gen, "tasks_to_test", list(range(no_tasks+1)))
+
     # Store train and test sets (over all tasks)
+    print("Loading all data")
     for i in range(no_tasks):
         x_train, y_train, x_test, y_test = data_gen.next_task()
         x_trainsets.append(x_train)
         y_trainsets.append(y_train)
-        x_testsets.append(x_test)
-        y_testsets.append(y_test)
+        if i in all_tasks_to_test:
+            x_testsets.append(x_test)
+            y_testsets.append(y_test)
+        else:
+            x_testsets.append(None)
+            y_testsets.append(None)
+    print("Done loading data")
+
 
     all_classes = list(range(data_gen.out_dim))
     training_loss_classes = []  # Training loss function depends on these classes
     training_classes = []       # Which classes' heads' weights change during training
     test_classes = []           # Which classes to compare between at test time
+    print("Setting up classification heads")
     for task_id in range(no_tasks):
         # The data input classes for this task
         data_classes = data_gen.classes[task_id]
@@ -333,6 +370,7 @@ def run_vcl_shared(hidden_size, no_epochs, data_gen, coreset_method, coreset_siz
             test_classes.append(all_classes)
 
     # Create model
+    print("Creating model")
     no_heads = out_dim
     lower_size = [in_dim] + deepcopy(hidden_size)
     upper_sizes = [[hidden_size[-1], 1] for i in range(no_heads)]
@@ -343,10 +381,12 @@ def run_vcl_shared(hidden_size, no_epochs, data_gen, coreset_method, coreset_siz
 
     bsh = get_beam_search_history(
         directory=path, 
+        beam_path=beam_path,
         max_beams=beam_size, 
         diffusion=diffusion, 
         jump_bias=jump_bias,
         max_depth=no_tasks,
+        mult_diff=mult_diff,
     )
 
     # Set up model weights at initial prior
@@ -356,17 +396,28 @@ def run_vcl_shared(hidden_size, no_epochs, data_gen, coreset_method, coreset_siz
     #for task_id in range(no_tasks):
     while len(hypotheses) > 0:
         task_id = bsh.depth  # at start will be 0
+        if task_id in all_tasks_to_test:
+            print()
+            print(f"Switch point on this task ({task_id})!")
+            print()
         results = []
+        print("Test tasks:", all_tasks_to_test)
         for hypothesis in hypotheses:
             # Previously trained models will load in their already computed results
             result_loaded, potential_result = RunResults.load(hypothesis.save_path)
             if result_loaded:
+                potential_result.hypothesis = hypothesis
                 results.append(potential_result)
+                print(f"Results for hypothesis {hypothesis.idx} found. Skipping training for this one.")
                 continue
+            else:
+                print(f"Results for hypothesis {hypothesis.idx} not found. Commencing training/testing.")
 
             result = {}
+            print("Getting weights")
             weights_storage, already_trained = hypothesis.get_weights(no_lower_weights, no_upper_weights)
             # tf init model
+            print("Initializing session")
             model.init_session(task_id, learning_rate, training_classes[task_id])
 
             # Get data
@@ -381,6 +432,7 @@ def run_vcl_shared(hidden_size, no_epochs, data_gen, coreset_method, coreset_siz
                     x_coresets, y_coresets, x_train, y_train, coreset_size)
 
             # Prior of weights is previous posterior (or, if first task, already in weights_storage)
+            print("Initializing weights")
             lower_weights_prior, upper_weights_prior = weights_storage.return_weights()
 
             # Initialise using random means + small variances
@@ -390,11 +442,14 @@ def run_vcl_shared(hidden_size, no_epochs, data_gen, coreset_method, coreset_siz
                 upper_weights[class_id] = deepcopy(initialise_weights(upper_weights_prior[class_id], already_trained))
 
             # Assign initial weights to the model
+            print("Assigning weights")
             model.assign_weights(list(range(no_heads)), lower_weights, upper_weights)
 
             # Train on non-coreset data
+            print("Initializing optimizer")
             model.reset_optimiser()
 
+            print("Starting training")
             start_time = time.time()
             costs, lik_costs = model.train(
                 x_train, 
@@ -410,11 +465,13 @@ def run_vcl_shared(hidden_size, no_epochs, data_gen, coreset_method, coreset_siz
             print('Time taken to train (s):', end_time - start_time)
 
             # Get weights from model, and store in weights_storage
+            print("Storing weights")
             lower_weights, upper_weights = model.get_weights(list(range(no_heads)))
             weights_storage.store_weights(lower_weights, upper_weights)
 
             # Save model weights after training on non-coreset data
             if store_weights:
+                print("Saving weights")
                 np.savez(
                     hypothesis.get_weight_save_dir(),
                     #path + 'weights_%d.npz' % task_id, 
@@ -425,12 +482,19 @@ def run_vcl_shared(hidden_size, no_epochs, data_gen, coreset_method, coreset_siz
                     class_index_conversion=data_gen.class_list,
                 )
 
+            print("Closing session")
             model.close_session()
 
             # Train on coreset data, then calculate test accuracy
+            tasks_to_test = [_t for _t in all_tasks_to_test if _t <= task_id]
+            print("Current task id:", task_id)
+            print("Test tasks:", all_tasks_to_test)
+            print("Specific test tasks:", tasks_to_test)
+            print()
+            print("Starting test evaluations")
             if multi_head:
                 acc = np.zeros(no_tasks)
-                for test_task_id in range(task_id+1):
+                for test_task_id in tasks_to_test:#range(task_id+1):
                     # Initialise session, and load weights into model
                     model.init_session(test_task_id, learning_rate, training_classes[test_task_id])
                     lower_weights, upper_weights = weights_storage.return_weights()
@@ -466,10 +530,14 @@ def run_vcl_shared(hidden_size, no_epochs, data_gen, coreset_method, coreset_siz
 
                 # Test-time: Calculate test accuracy
                 acc_interm = utils.get_scores_output_pred(model, x_testsets, y_testsets, test_classes,
-                                                task_idx=list(range(task_id+1)), multi_head=multi_head)
-                acc[:task_id+1] = acc_interm
+                                                task_idx=tasks_to_test,#list(range(task_id+1)), 
+                                                multi_head=multi_head)
+                #acc[:task_id+1] = acc_interm
+                for _j, _t in enumerate(tasks_to_test):
+                    acc[_t] = acc_interm[_j]
 
                 model.close_session()
+            print("Testing done")
 
             # Append accuracies to all_acc array
             # if task_id == 0:
@@ -484,7 +552,8 @@ def run_vcl_shared(hidden_size, no_epochs, data_gen, coreset_method, coreset_siz
         bsh.register_results(hypotheses, results)
         bsh.prune_beams()
 
-        pickle.dump(bsh, open(f"{path.rstrip('/')}/beam_history.pkl", "wb"))
+        #pickle.dump(bsh, open(f"{path.rstrip('/')}/beam_history.pkl", "wb"))
+        pickle.dump(bsh, open(beam_path, "wb"))
 
         hypotheses = bsh.get_new_hypotheses()
         

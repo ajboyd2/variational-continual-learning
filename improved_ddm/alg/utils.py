@@ -16,6 +16,7 @@ def get_scores_output_pred(model, x_testsets, y_testsets, test_classes, task_idx
 
     # Go over each task's testset
     for i in task_idx:
+        print(f"Testing task {i}")
         x_test, y_test = x_testsets[i], y_testsets[i]
 
         # Output from model
