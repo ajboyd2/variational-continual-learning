@@ -112,7 +112,7 @@ multi_head = False          # Multi-head or single-head network
 
 hidden_size = [100, 100]    # Size and number of hidden layers
 batch_size = 1024           # Batch size
-no_epochs = 2500             # Number of training epochs per task
+no_epochs = 3000             # Number of training epochs per task
 learning_rate = 0.005
 permuted_num_tasks = 50 #10
 
@@ -130,11 +130,12 @@ options = [  # (diffusion, jump_bias, path_suffix, relative_broadening, beam_siz
 ]
 
 import sys
-diffusion = float(sys.argv[-1])#, int(sys.argv[-1])]
-beam_size = 2 #1
+diffusion = float(sys.argv[-2])#, int(sys.argv[-1])]
+beam_size = int(sys.argv[-1]) #1
 path_suffix = f"long_m{diffusion}"
 jump_bias = 0.2 #0.0
 mult_diff = diffusion != 0.0
+upper_fixed = True 
 
 # No coreset
 tf.reset_default_graph()
@@ -142,9 +143,9 @@ random_seed = 1
 tf.set_random_seed(random_seed+1)
 np.random.seed(random_seed)
 
-path = f'model_storage/long_permuted/{path_suffix}/'    # Path where to store files
+path = f'model_storage/long_permuted{"_upper_fixed" if upper_fixed else ""}/{path_suffix}/'    # Path where to store files
 #path = f'model_storage/long_small_permuted/{path_suffix}/'    # Path where to store files
-beam_path = f'{path}beam_j{jump_bias}_history.pkl'
+beam_path = f'{path}beam_s{beam_size}_j{jump_bias}_history.pkl'
 # Ensure path exists to save results to
 inc_path = "."
 for folder in path.split("/"):
@@ -154,11 +155,14 @@ for folder in path.split("/"):
         print(f"Making directory: {inc_path}")
         os.mkdir(inc_path)
 
+print(f"Saving results to {beam_path}.")
+
 data_gen = LongPermutedMnistGenerator(max_iter=permuted_num_tasks, random_seed=random_seed)
 coreset_size = 0
 vcl_result = vcl.run_vcl_shared(hidden_size, no_epochs, data_gen,
     coreset.rand_from_batch, coreset_size, batch_size, path, multi_head, store_weights=store_weights,
-    beam_size=beam_size, diffusion=diffusion, jump_bias=jump_bias, mult_diff=mult_diff, beam_path=beam_path)
+    beam_size=beam_size, diffusion=diffusion, jump_bias=jump_bias, mult_diff=mult_diff, beam_path=beam_path,
+    upper_fixed=upper_fixed)
 
 # Store accuracies
 np.savez(path + 'test_acc.npz', acc=vcl_result)

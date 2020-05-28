@@ -1,6 +1,17 @@
 import tensorflow as tf
 import numpy as np
 from copy import deepcopy
+from utils import print_log
+
+from tensorflow.python.client import timeline
+PROFILE = False
+if PROFILE:
+    print_log("====================================")
+    print_log("====================================")
+    print_log("----------PROFILING ENABLED---------")
+    print_log("====================================")
+    print_log("====================================")
+    print_log()
 
 np.random.seed(0)
 tf.set_random_seed(0)
@@ -56,6 +67,7 @@ class MFVI_NN(object):
         self.no_train_samples = no_train_samples if no_train_samples > 0 else 10
         self.no_test_samples = no_test_samples
         self.use_float64 = use_float64
+        print_log("\tConstants are set.")
 
         # Input and output placeholders
         if use_float64 == True:
@@ -64,23 +76,32 @@ class MFVI_NN(object):
         else:
             self.x = tf.placeholder(tf.float32, [None, lower_size[0]])
             self.ys = [tf.placeholder(tf.float32, [None, upper_size[-1]]) for upper_size in upper_sizes]
+        print_log("\tInput placeholders made.")
 
         # Number of training points
         self.training_size = tf.placeholder(tf.int32)
 
         # Lower and upper layer of model
         self.lower_net = HalfNet(lower_size, use_float64)
+        print_log("\tLower net made.")
+
         self.upper_nets = []
         for t, upper_size in enumerate(self.upper_sizes):
             self.upper_nets.append(HalfNet(upper_size, use_float64))
+            print_log(f"\t Upper net {t+1} of {len(self.upper_sizes)} made.")
+
 
         # Build train loss, likelihood loss, and predictions (for test-time)
         self.training_loss, self.likelihood_loss = self._build_training_loss()
+        print_log("\tTraining losses built.")
         self.preds = self._build_preds()
+        print_log("\tPreds built.")
 
     def _build_training_loss(self):
         # Each task cost depends on different classes
         kl_lower = self.lower_net.KL_term()
+        print_log("\t\tLower kl term made.")
+
         costs = []
         likelihood_costs = []
 
@@ -106,6 +127,8 @@ class MFVI_NN(object):
             # Overall variational objective function for this task
             cost = tf.div(kl_lower + kl_upper, N) - log_pred
             costs.append(cost)
+            print_log(f"\t\tCost term {task_id} of {self.no_tasks} made.")
+
 
         return costs, likelihood_costs
 
@@ -115,6 +138,8 @@ class MFVI_NN(object):
         for t, upper_net in enumerate(self.upper_nets):
             pred = self.prediction_fn(self.x, t, self.no_test_samples)
             preds.append(pred)
+            print_log(f"\t\tPred function {t+1} of {len(self.upper_nets)} made.")
+
         return preds
 
     # Called by _build_preds() for each upper_net (or, for each class)
@@ -159,7 +184,16 @@ class MFVI_NN(object):
 
         # launch a session
         self.sess = tf.Session()
-        self.sess.run(init)
+        if PROFILE:
+            options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
+            run_metadata = tf.RunMetadata()
+            self.sess.run(init, options=options, run_metadata=run_metadata)
+            fetched_timeline = timeline.Timeline(run_metadata.step_stats)
+            chrome_trace = fetched_timeline.generate_chrome_trace_format()
+            with open('model_storage/profiling/model_init.json', 'w') as f:
+                f.write(chrome_trace)
+        else:
+            self.sess.run(init)
 
     # Close tf session
     def close_session(self):
@@ -217,9 +251,20 @@ class MFVI_NN(object):
                     feed_dict[self.ys[class_id]] = batch_input
 
                 # Run optimisation operation (backprop) and cost operation (to get loss value)
-                _, c_total, lik_loss = sess.run(
-                    [self.train_step, self.training_loss[task_id], self.likelihood_loss[task_id]],
-                    feed_dict=feed_dict)
+                if PROFILE:
+                    options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
+                    run_metadata = tf.RunMetadata()
+                    _, c_total, lik_loss = sess.run(
+                        [self.train_step, self.training_loss[task_id], self.likelihood_loss[task_id]],
+                        feed_dict=feed_dict, options=options, run_metadata=run_metadata)
+                    fetched_timeline = timeline.Timeline(run_metadata.step_stats)
+                    chrome_trace = fetched_timeline.generate_chrome_trace_format()
+                    with open('model_storage/profiling/model_train.json', 'w') as f:
+                        f.write(chrome_trace)
+                else:
+                    _, c_total, lik_loss = sess.run(
+                        [self.train_step, self.training_loss[task_id], self.likelihood_loss[task_id]],
+                        feed_dict=feed_dict)
 
                 # Compute average loss
                 avg_cost += c_total / total_batch
@@ -227,12 +272,12 @@ class MFVI_NN(object):
 
             # Display logs every display_epoch
             if epoch == 0 or (epoch+1) % display_epoch == 0 or epoch == no_epochs-1:
-                print("Epoch:", '%04d' % (epoch + 1), "total cost=", "{:.9f}".format(avg_cost), "lik term=",
+                print_log("Epoch:", '%04d' % (epoch + 1), "total cost=", "{:.9f}".format(avg_cost), "lik term=",
                       "{:.9f}".format(avg_lik_cost), "kl term=", "{:.9f}".format(avg_cost - avg_lik_cost))
             costs.append(avg_cost)
             lik_costs.append(avg_lik_cost)
 
-        print("Optimisation Finished!")
+        print_log("Optimization Finished!")
 
         return costs, lik_costs
 
@@ -248,9 +293,21 @@ class MFVI_NN(object):
             end_ind = np.min([(i + 1) * batch_size, N])
             batch_x = x_test[start_ind:end_ind, :]
 
-            prediction = self.sess.run(
-                [self.preds],
-                feed_dict={self.x: batch_x})[0]
+            if PROFILE and (i==0):
+                options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
+                run_metadata = tf.RunMetadata()
+                prediction = self.sess.run(
+                    [self.preds],
+                    feed_dict={self.x: batch_x},
+                    options=options, run_metadata=run_metadata)[0]
+                fetched_timeline = timeline.Timeline(run_metadata.step_stats)
+                chrome_trace = fetched_timeline.generate_chrome_trace_format()
+                with open('model_storage/profiling/model_prediction.json', 'w') as f:
+                    f.write(chrome_trace)
+            else:
+                prediction = self.sess.run(
+                    [self.preds],
+                    feed_dict={self.x: batch_x})[0]
 
             if i == 0:
                 predictions = prediction
@@ -268,7 +325,18 @@ class MFVI_NN(object):
 
     # Return weights currently in model
     def get_weights(self, class_idx):
-        lower = self.sess.run(self.lower_net.params)
+        if PROFILE:
+            options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
+            run_metadata = tf.RunMetadata()
+            lower = self.sess.run(self.lower_net.params,
+                options=options, run_metadata=run_metadata)
+            fetched_timeline = timeline.Timeline(run_metadata.step_stats)
+            chrome_trace = fetched_timeline.generate_chrome_trace_format()
+            with open('model_storage/profiling/model_get_lower_weights.json', 'w') as f:
+                f.write(chrome_trace)
+        else:
+            lower = self.sess.run(self.lower_net.params)
+
         upper = []
         for class_id in class_idx:
             upper_interm = deepcopy(self.sess.run(self.upper_nets[class_id].params))
@@ -279,26 +347,75 @@ class MFVI_NN(object):
     def assign_weights(self, class_idx, lower_weights, upper_weights):
         # Lower network weights
         lower_net = self.lower_net
-        self.sess.run(
-            [lower_net.assign_m_op, lower_net.assign_v_op],
-            feed_dict={
-                lower_net.new_m: lower_weights[0],
-                lower_net.new_v: lower_weights[1]})
+        if PROFILE:
+            options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
+            run_metadata = tf.RunMetadata()
+            self.sess.run(
+                [lower_net.assign_m_op, lower_net.assign_v_op],
+                feed_dict={
+                    lower_net.new_m: lower_weights[0],
+                    lower_net.new_v: lower_weights[1]},
+                options=options, run_metadata=run_metadata)
+            fetched_timeline = timeline.Timeline(run_metadata.step_stats)
+            chrome_trace = fetched_timeline.generate_chrome_trace_format()
+            with open('model_storage/profiling/model_assign_lower_weights.json', 'w') as f:
+                f.write(chrome_trace)
+        else:
+            self.sess.run(
+                [lower_net.assign_m_op, lower_net.assign_v_op],
+                feed_dict={
+                    lower_net.new_m: lower_weights[0],
+                    lower_net.new_v: lower_weights[1]})
 
         if not isinstance(class_idx, list):
             class_idx = [class_idx]
 
         # Upper weights: go over each class
-        for class_id in class_idx:
-            assign_m_op = tf.assign(self.upper_nets[class_id].m, self.upper_nets[class_id].new_m)
-            self.sess.run(
-                assign_m_op, feed_dict={
-                    self.upper_nets[class_id].new_m: upper_weights[class_id][0]})
+        if PROFILE:
+            for class_id in class_idx:
+                options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
+                run_metadata = tf.RunMetadata()
+                assign_m_op = tf.assign(self.upper_nets[class_id].m, self.upper_nets[class_id].new_m)
+                self.sess.run(
+                    assign_m_op, feed_dict={
+                        self.upper_nets[class_id].new_m: upper_weights[class_id][0]},
+                    options=options, run_metadata=run_metadata)
+                fetched_timeline = timeline.Timeline(run_metadata.step_stats)
+                chrome_trace = fetched_timeline.generate_chrome_trace_format()
+                with open('model_storage/profiling/model_assign_upper_m_weights_{}.json'.format(class_id), 'w') as f:
+                    f.write(chrome_trace)
 
-            assign_v_op = tf.assign(self.upper_nets[class_id].v, self.upper_nets[class_id].new_v)
-            self.sess.run(
-                assign_v_op, feed_dict={
-                    self.upper_nets[class_id].new_v: upper_weights[class_id][1]})
+                options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
+                run_metadata = tf.RunMetadata()
+                assign_v_op = tf.assign(self.upper_nets[class_id].v, self.upper_nets[class_id].new_v)
+                self.sess.run(
+                    assign_v_op, feed_dict={
+                        self.upper_nets[class_id].new_v: upper_weights[class_id][1]},
+                    options=options, run_metadata=run_metadata)
+                fetched_timeline = timeline.Timeline(run_metadata.step_stats)
+                chrome_trace = fetched_timeline.generate_chrome_trace_format()
+                with open('model_storage/profiling/model_assign_upper_v_weights_{}.json'.format(class_id), 'w') as f:
+                    f.write(chrome_trace)
+        else:
+            for class_id in class_idx:
+                upper_net_class = self.upper_nets[class_id]
+                assign_m_op, assign_v_op = upper_net_class.assign_m_op, upper_net_class.assign_v_op
+                self.sess.run(
+                    [assign_m_op, assign_v_op],
+                    feed_dict={
+                        upper_net_class.new_m: upper_weights[class_id][0],
+                        upper_net_class.new_v: upper_weights[class_id][1],
+                    },
+                )
+                # assign_m_op = tf.assign(self.upper_nets[class_id].m, self.upper_nets[class_id].new_m)
+                # self.sess.run(
+                #     assign_m_op, feed_dict={
+                #         self.upper_nets[class_id].new_m: upper_weights[class_id][0]})
+
+                # assign_v_op = tf.assign(self.upper_nets[class_id].v, self.upper_nets[class_id].new_v)
+                # self.sess.run(
+                #     assign_v_op, feed_dict={
+                #         self.upper_nets[class_id].new_v: upper_weights[class_id][1]})
 
     # Reset tf optimiser
     def reset_optimiser(self):

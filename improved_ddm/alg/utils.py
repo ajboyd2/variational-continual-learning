@@ -1,6 +1,11 @@
 import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
+from datetime import datetime
+
+
+def print_log(*args):
+    print("[{}]".format(datetime.now()), *args)
 
 def merge_coresets(x_coresets, y_coresets):
     merged_x, merged_y = x_coresets[0], y_coresets[0]
@@ -16,11 +21,13 @@ def get_scores_output_pred(model, x_testsets, y_testsets, test_classes, task_idx
 
     # Go over each task's testset
     for i in task_idx:
-        print(f"Testing task {i}")
+        print_log(f"Testing task {i}")
         x_test, y_test = x_testsets[i], y_testsets[i]
 
         # Output from model
         pred = model.prediction_prob(x_test)
+        print_log(f"Predictions done for task {i}")
+
 
         # Mean over the different Monte Carlo models
         pred_mean_total = np.mean(pred, axis=1)
