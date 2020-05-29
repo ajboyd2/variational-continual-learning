@@ -88,6 +88,7 @@ class Hypothesis:
         prev_results=None, 
         no_alternative_hyp=False,
         upper_fixed=False,
+        reset_weights=False
     ):
         self.idx = idx
         self.prev_weights_path = prev_weights_path
@@ -99,6 +100,7 @@ class Hypothesis:
         self.task_id = task_id
         self.prev_results = prev_results
         self.upper_fixed = upper_fixed
+        self.reset_weights = reset_weights
 
         print_log("\n----------------------------------------------------------------")
         print_log(f"Hypothesis {idx} created for {self.get_weight_save_dir()}")
@@ -116,8 +118,14 @@ class Hypothesis:
             prior_var=1.0,
         )
 
+
         # TODO: Allow for True values by fixing the KL divergence values in that case
         already_trained = False #os.path.exists(self.get_weight_save_dir())
+
+        if self.reset_weights:
+            print_log("Model weights have been reset.")
+            return ws, already_trained
+
         if already_trained:
             print_log("Model already trained. Loading in previously trained weights.")
             weights_path = self.get_weight_save_dir()
@@ -234,6 +242,9 @@ class BeamSearchHistory:
         max_depth=10, 
         mult_diff=False,
         upper_fixed=False,
+        restart_every_iter=False,
+        restart_every_switch=False,
+        switch_points=[],
     ):
         self.directory = directory
         self.max_beams = max_beams
@@ -241,6 +252,9 @@ class BeamSearchHistory:
         self.jump_bias = jump_bias
         self.mult_diff = mult_diff
         self.upper_fixed = upper_fixed
+        self.restart_every_iter = restart_every_iter
+        self.restart_every_switch = restart_every_switch
+        self.switch_points = switch_points
         if mult_diff:
             if diffusion == 1:
                 self.no_jumping = True
@@ -266,6 +280,13 @@ class BeamSearchHistory:
     def get_new_hypotheses(self):
         if self.depth == self.max_depth:
             return []
+
+        if self.restart_every_iter:
+            reset_weights = True
+        elif self.restart_every_switch:
+            reset_weights = self.depth in self.switch_points
+        else:
+            reset_weights = False
         
         if self.root is None:
             self.num_hypotheses += 1
@@ -279,6 +300,7 @@ class BeamSearchHistory:
                 task_id=0, 
                 prev_results=None,
                 upper_fixed=self.upper_fixed,
+                reset_weights=False,  # first iteration, will be initialized as N(0,1) anyways
             )]
         else:
             hypotheses = []
@@ -299,6 +321,7 @@ class BeamSearchHistory:
                         prev_results=beam,
                         no_alternative_hyp=len(options) == 1,
                         upper_fixed=self.upper_fixed,
+                        reset_weights=reset_weights,
                     ))
                     self.num_hypotheses += 1
             return hypotheses
@@ -361,12 +384,15 @@ def initialise_weights(weights, already_trained):
 # Run VCL on model; returns accuracies on each task after training on each task
 def run_vcl_shared(hidden_size, no_epochs, data_gen, coreset_method, coreset_size=0,
                    batch_size=None, path='sandbox/', multi_head=False, learning_rate=0.005, store_weights=False,
-                   beam_size=1, diffusion=0, jump_bias=0, mult_diff=False, beam_path=None, upper_fixed=False):
+                   beam_size=1, diffusion=0, jump_bias=0, mult_diff=False, beam_path=None, upper_fixed=False,
+                   restart_every_iter=False, restart_every_switch=False):
     assert(beam_path is not None)
     in_dim, out_dim = data_gen.get_dims()
     x_coresets, y_coresets = [], []
     x_testsets, y_testsets = [], []
     x_trainsets, y_trainsets = [], []
+
+    #retest_metrics = coreset_size > 0
 
     all_acc = np.array([])
     no_tasks = data_gen.max_iter
@@ -377,8 +403,13 @@ def run_vcl_shared(hidden_size, no_epochs, data_gen, coreset_method, coreset_siz
     print_log("Loading all data")
     for i in range(no_tasks):
         x_train, y_train, x_test, y_test = data_gen.next_task()
+        if coreset_size > 0:
+            print(f"\tCreating coreset {i}")
+            x_coresets, y_coresets, x_train, y_train = coreset_method(
+                     x_coresets, y_coresets, x_train, y_train, coreset_size)
         x_trainsets.append(x_train)
         y_trainsets.append(y_train)
+
         if i in all_tasks_to_test:
             x_testsets.append(x_test)
             y_testsets.append(y_test)
@@ -432,6 +463,9 @@ def run_vcl_shared(hidden_size, no_epochs, data_gen, coreset_method, coreset_siz
         max_depth=no_tasks,
         mult_diff=mult_diff,
         upper_fixed=upper_fixed,
+        restart_every_iter=restart_every_iter,
+        restart_every_switch=restart_every_switch,
+        switch_points=all_tasks_to_test,
     )
     print_log("Beam search history initialized.")
         
@@ -475,10 +509,11 @@ def run_vcl_shared(hidden_size, no_epochs, data_gen, coreset_method, coreset_siz
             # Set batch size
             bsize = x_train.shape[0] if (batch_size is None) else batch_size
 
-            # Select coreset if needed
-            if coreset_size > 0:
-                x_coresets, y_coresets, x_train, y_train = coreset_method(
-                    x_coresets, y_coresets, x_train, y_train, coreset_size)
+            # # Select coreset if needed
+            # if coreset_size > 0:
+            #     print_log()
+            #     x_coresets, y_coresets, x_train, y_train = coreset_method(
+            #         x_coresets, y_coresets, x_train, y_train, coreset_size)
 
             # Prior of weights is previous posterior (or, if first task, already in weights_storage)
             print_log("Initializing weights")
@@ -576,14 +611,25 @@ def run_vcl_shared(hidden_size, no_epochs, data_gen, coreset_method, coreset_siz
                 # lower_weights, upper_weights = weights_storage.return_weights()
                 # model.assign_weights(list(range(no_heads)), lower_weights, upper_weights)
                 if len(x_coresets) > 0:
-                    model.init_session(task_id, learning_rate, training_classes[task_id])
+                    if multi_head:
+                        model.init_session(task_id, learning_rate, training_classes[task_id])
                     lower_weights, upper_weights = weights_storage.return_weights()
                     model.assign_weights(list(range(no_heads)), lower_weights, upper_weights)
                     print_log('Training on coreset data...')
-                    x_train_coreset, y_train_coreset = utils.merge_coresets(x_coresets, y_coresets)
+                    x_train_coreset, y_train_coreset = utils.merge_coresets(x_coresets[:task_id+1], y_coresets[:task_id+1])
                     bsize = x_train_coreset.shape[0] if (batch_size is None) else batch_size
-                    _, _ = model.train(x_train_coreset, y_train_coreset, task_id,
-                                    lower_weights, upper_weights, no_epochs, bsize)
+
+
+                    #model.reset_optimiser()
+                    _, _ = model.train(
+                        x_train_coreset, 
+                        y_train_coreset, 
+                        task_id if multi_head else 0,
+                        lower_weights, 
+                        upper_weights, 
+                        no_epochs, 
+                        bsize,
+                    )
 
                 # Test-time: Calculate test accuracy
                 acc_interm = utils.get_scores_output_pred(model, x_testsets, y_testsets, test_classes,

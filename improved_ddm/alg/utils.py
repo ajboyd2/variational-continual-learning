@@ -26,8 +26,6 @@ def get_scores_output_pred(model, x_testsets, y_testsets, test_classes, task_idx
 
         # Output from model
         pred = model.prediction_prob(x_test)
-        print_log(f"Predictions done for task {i}")
-
 
         # Mean over the different Monte Carlo models
         pred_mean_total = np.mean(pred, axis=1)
@@ -50,6 +48,7 @@ def get_scores_output_pred(model, x_testsets, y_testsets, test_classes, task_idx
         # Calculate test accuracy
         cur_acc = len(np.where((pred_y - y) == 0)[0]) * 1.0 / y.shape[0]
         acc.append(cur_acc)
+        print_log(f"Predictions done for task {i}. Acc: {cur_acc}")
 
     return acc
 

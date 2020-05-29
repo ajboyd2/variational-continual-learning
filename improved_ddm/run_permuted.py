@@ -81,7 +81,7 @@ multi_head = False          # Multi-head or single-head network
 
 hidden_size = [100, 100]    # Size and number of hidden layers
 batch_size = 1024           # Batch size
-no_epochs = 100 #400 #800             # Number of training epochs per task
+no_epochs = 200 #400 #800   # Number of training epochs per task
 learning_rate = 0.01 #0.005
 permuted_num_tasks = 50 #10
 
@@ -113,7 +113,8 @@ random_seed = 1
 tf.set_random_seed(random_seed+1)
 np.random.seed(random_seed)
 
-path = f'model_storage/permuted{"_upper_fixed" if upper_fixed else ""}/{path_suffix}/'    # Path where to store files
+coreset_size = 200
+path = f'model_storage/permuted{"_upper_fixed" if upper_fixed else ""}_{f"cs_{coreset_size}" if coreset_size > 0 else ""}/{path_suffix}/'    # Path where to store files
 #path = f'model_storage/long_small_permuted/{path_suffix}/'    # Path where to store files
 beam_path = f'{path}beam_s{beam_size}_j{jump_bias}_history.pkl'
 # Ensure path exists to save results to
@@ -126,7 +127,6 @@ for folder in path.split("/"):
         os.mkdir(inc_path)
 
 data_gen = PermutedMnistGenerator(max_iter=permuted_num_tasks, random_seed=random_seed)
-coreset_size = 0
 vcl_result = vcl.run_vcl_shared(hidden_size, no_epochs, data_gen,
     coreset.rand_from_batch, coreset_size, batch_size, path, multi_head, store_weights=store_weights,
     beam_size=beam_size, diffusion=diffusion, jump_bias=jump_bias, mult_diff=mult_diff, beam_path=beam_path,
